@@ -682,6 +682,26 @@ pages:
         title: Bilibili / IndexTTS
         callout_indextts2_unavailable_title: Limited Support
         callout_indextts2_unavailable: Support for IndexTTS2 is currently unavailable. Please use IndexTTS.
+      voicevox:
+        description: voicevox.hiroshiba.jp
+        title: VOICEVOX
+        fields:
+          pitch:
+            description: Adjust the pitch (height) of the voice
+            label: Pitch
+          intonation:
+            description: Adjust the intonation of the voice
+            label: Intonation
+      aivis-speech:
+        description: aivis-project.com
+        title: AivisSpeech
+        fields:
+          pitch:
+            description: Tune the pitch of synthesized speech (e.g., sharper or coarser)
+            label: Pitch
+          intonation:
+            description: Adjust the intonation of the voice
+            label: Intonation
       azure-ai-foundry:
         description: Azure AI Foundry
         title: Azure AI Foundry

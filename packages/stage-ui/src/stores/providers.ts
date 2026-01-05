@@ -1546,6 +1546,347 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
     },
+    'voicevox': {
+      id: 'voicevox',
+      category: 'speech',
+      tasks: ['text-to-speech'],
+      nameKey: 'settings.pages.providers.provider.voicevox.title',
+      name: 'VOICEVOX',
+      descriptionKey: 'settings.pages.providers.provider.voicevox.description',
+      description: 'voicevox.hiroshiba.jp',
+      icon: 'i-solar:microphone-2-bold-duotone',
+      iconColor: 'i-lobe-icons:voicevox',
+      defaultOptions: () => ({
+        baseUrl: 'http://127.0.0.1:10101',
+        speed: 1.0,
+        pitch: 0.0,
+        intonation: 1.0,
+      }),
+      createProvider: async (config) => {
+        const baseUrl = (config.baseUrl as string).trim().replace(/\/$/, '')
+
+        const provider: SpeechProvider = {
+          speech: (model, extraOptions) => {
+            return {
+              baseURL: baseUrl,
+              model: 'voicevox',
+              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                // VOICEVOX APIの2段階フローを実装
+                // 1. audio_queryで音声クエリを生成
+                // 2. synthesisで音声を合成
+
+                // generateSpeech関数から渡されるパラメータを取得
+                // inputとvoiceはgenerateSpeech関数から渡される
+                const request = input instanceof Request ? input : new Request(input, init)
+                const url = new URL(request.url)
+                const text = url.searchParams.get('input') || url.searchParams.get('text') || ''
+                const speakerId = url.searchParams.get('voice') || url.searchParams.get('speaker') || ''
+
+                // 設定からパラメータを取得
+                const speed = (extraOptions?.speed as number) ?? (config.speed as number) ?? 1.0
+                const pitch = (extraOptions?.pitch as number) ?? (config.pitch as number) ?? 0.0
+                const intonation = (extraOptions?.intonation as number) ?? (config.intonation as number) ?? 1.0
+
+                if (!text || !speakerId) {
+                  throw new Error('Text and speaker ID are required')
+                }
+
+                // Step 1: audio_queryで音声クエリを生成
+                const audioQueryUrl = `${baseUrl}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`
+                const audioQueryResponse = await fetch(audioQueryUrl, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                })
+
+                if (!audioQueryResponse.ok) {
+                  throw new Error(`Failed to create audio query: ${audioQueryResponse.statusText}`)
+                }
+
+                const audioQuery = await audioQueryResponse.json()
+
+                // パラメータを設定
+                if (speed !== undefined && speed !== 1.0) {
+                  audioQuery.speedScale = speed
+                }
+                if (pitch !== undefined && pitch !== 0.0) {
+                  audioQuery.pitchScale = pitch
+                }
+                if (intonation !== undefined && intonation !== 1.0) {
+                  audioQuery.intonationScale = intonation
+                }
+
+                // Step 2: synthesisで音声を合成
+                const synthesisUrl = `${baseUrl}/synthesis?speaker=${speakerId}`
+                const synthesisResponse = await fetch(synthesisUrl, {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify(audioQuery),
+                })
+
+                if (!synthesisResponse.ok) {
+                  throw new Error(`Failed to synthesize audio: ${synthesisResponse.statusText}`)
+                }
+
+                // WAV形式の音声データを返す
+                return synthesisResponse
+              },
+            }
+          },
+        }
+        return provider
+      },
+      capabilities: {
+        listVoices: async (config) => {
+          const baseUrl = (config.baseUrl as string).trim().replace(/\/$/, '')
+          const response = await fetch(`${baseUrl}/speakers`)
+          if (!response.ok) {
+            throw new Error(`Failed to fetch speakers: ${response.statusText}`)
+          }
+          const speakers = await response.json() as Array<{
+            name: string
+            speaker_uuid: string
+            styles: Array<{
+              name: string
+              id: number
+            }>
+          }>
+
+          // 各話者のスタイルを展開してVoiceInfoとして返す
+          const voices: VoiceInfo[] = []
+          for (const speaker of speakers) {
+            for (const style of speaker.styles) {
+              voices.push({
+                id: String(style.id),
+                name: `${speaker.name} (${style.name})`,
+                provider: 'voicevox',
+                languages: [{ code: 'ja', title: 'Japanese' }],
+              })
+            }
+          }
+
+          return voices
+        },
+      },
+      validators: {
+        validateProviderConfig: async (config) => {
+          const errors: Error[] = []
+          const baseUrl = (config.baseUrl as string).trim().replace(/\/$/, '')
+
+          if (!baseUrl) {
+            errors.push(new Error('Base URL is required.'))
+          }
+
+          const res = baseUrlValidator.value(baseUrl)
+          if (res) {
+            errors.push(...(res.errors as Error[]))
+          }
+
+          if (errors.length > 0) {
+            return { errors, reason: errors.map(e => e.message).join(', '), valid: false }
+          }
+
+          try {
+            const controller = new AbortController()
+            const timeout = setTimeout(() => controller.abort(), 5000) // 5 second timeout
+            const response = await fetch(`${baseUrl}/speakers`, { signal: controller.signal })
+            clearTimeout(timeout)
+
+            if (!response.ok) {
+              const reason = `VoiceVox server unreachable: HTTP ${response.status} ${response.statusText}`
+              errors.push(new Error(reason))
+              return { errors, reason, valid: false }
+            }
+            // Optionally, check if the response is valid JSON or matches expected structure for speakers
+            await response.json() // Attempt to parse as JSON
+          }
+          catch (err) {
+            const reason = `Failed to connect to VoiceVox server. Please ensure the VoiceVox engine is running at ${baseUrl}. Error: ${String(err)}`
+            errors.push(err as Error)
+            return { errors, reason, valid: false }
+          }
+
+          return { errors: [], reason: '', valid: true }
+        },
+      },
+    },
+    'aivis-speech': {
+      id: 'aivis-speech',
+      category: 'speech',
+      tasks: ['text-to-speech'],
+      nameKey: 'settings.pages.providers.provider.aivis-speech.title',
+      name: 'AivisSpeech',
+      descriptionKey: 'settings.pages.providers.provider.aivis-speech.description',
+      description: 'aivis-project.com',
+      icon: 'i-solar:microphone-2-bold-duotone',
+
+      // デフォルト設定
+      defaultOptions: () => ({
+        baseUrl: 'http://127.0.0.1:10101',
+        speed: 1.0,
+        pitch: 0.0,
+        intonation: 1.0,
+      }),
+
+      // プロバイダー生成 (音声合成の実行ロジック)
+      createProvider: async (config) => {
+        const baseUrl = (config.baseUrl as string).trim().replace(/\/$/, '')
+
+        const provider: SpeechProvider = {
+          speech: (model, extraOptions) => {
+            return {
+              baseURL: baseUrl,
+              model: 'aivis-speech',
+              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                // リクエストの解析
+                const request = input instanceof Request ? input : new Request(input, init)
+                const url = new URL(request.url)
+
+                // --- パラメータ取得 (URLパラメータ または JSON Body) ---
+                let text = ''
+                let speakerId = '0'
+
+                // パターン1: URLパラメータから取得 (aivis-speech.vue のテスト機能用)
+                if (url.searchParams.has('input') || url.searchParams.has('text')) {
+                  text = url.searchParams.get('input') || url.searchParams.get('text') || ''
+                  speakerId = url.searchParams.get('voice') || url.searchParams.get('speaker') || '0'
+                }
+
+                if (!text && init && init.body) {
+                  try {
+                    const bodyStr = typeof init.body === 'string' ? init.body : JSON.stringify(init.body)
+                    const body = JSON.parse(bodyStr)
+                    if (body.input)
+                      text = body.input
+                    if (body.voice)
+                      speakerId = body.voice
+                  }
+                  catch (e) {
+                    console.warn('[AivisSpeech] Failed to parse body:', e)
+                  }
+                }
+
+                if (!text)
+                  throw new Error('Text input is required')
+
+                // 音声パラメータの適用
+                const speed = (extraOptions?.speed as number) ?? (config.speed as number) ?? 1.0
+                const pitch = (extraOptions?.pitch as number) ?? (config.pitch as number) ?? 0.0
+                const intonation = (extraOptions?.intonation as number) ?? (config.intonation as number) ?? 1.0
+
+                // --- Step 1: audio_query (音声合成クエリ作成) ---
+                const queryRes = await fetch(`${baseUrl}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                })
+
+                if (!queryRes.ok)
+                  throw new Error(`AivisSpeech audio_query failed: ${queryRes.status}`)
+                const queryJson = await queryRes.json()
+
+                // パラメータの上書き適用
+                queryJson.speedScale = speed
+                queryJson.pitchScale = pitch
+                queryJson.intonationScale = intonation
+
+                // --- Step 2: synthesis (音声波形生成) ---
+                const synthRes = await fetch(`${baseUrl}/synthesis?speaker=${speakerId}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(queryJson),
+                })
+
+                if (!synthRes.ok)
+                  throw new Error(`AivisSpeech synthesis failed: ${synthRes.status}`)
+
+                return synthRes
+              },
+            }
+          },
+        }
+        return provider
+      },
+
+      // 機能定義 (モデル一覧取得ロジック)
+      // ※ createProvider の外側に配置することが重要
+      capabilities: {
+        listModels: async (config) => {
+          return [
+            {
+              id: 'aivis-speech',
+              name: 'AivisSpeech Engine',
+              provider: 'aivis-speech', // ★これが必須です！
+            },
+          ]
+        },
+
+        // 音声一覧取得
+        listVoices: async (config) => {
+          try {
+            const baseUrl = (config.baseUrl as string).trim().replace(/\/$/, '')
+            const response = await fetch(`${baseUrl}/speakers`)
+            if (!response.ok)
+              throw new Error('Fetch failed')
+
+            const speakers = await response.json() as any[]
+            const voices: VoiceInfo[] = []
+
+            for (const speaker of speakers) {
+              for (const style of speaker.styles) {
+                voices.push({
+                  id: String(style.id),
+                  name: `${speaker.name} (${style.name})`,
+                  provider: 'aivis-speech',
+                  // モデルIDと一致させることで選択可能にする
+                  compatibleModels: ['aivis-speech'],
+                  languages: [{ code: 'ja', title: 'Japanese' }],
+                })
+              }
+            }
+            return voices
+          }
+          catch (e) {
+            console.warn('Failed to list voices', e)
+            return []
+          }
+        },
+      },
+
+      // 接続確認バリデーション
+      validators: {
+        validateProviderConfig: async (config) => {
+          const baseUrl = (config.baseUrl as string)?.trim().replace(/\/$/, '')
+          if (!baseUrl) {
+            return { errors: [new Error('URL required')], valid: false, reason: 'URLが空です' }
+          }
+
+          try {
+            // サーバーの稼働確認 (versionエンドポイント)
+            const controller = new AbortController()
+            const id = setTimeout(() => controller.abort(), 2000)
+            const response = await fetch(`${baseUrl}/version`, { signal: controller.signal })
+            clearTimeout(id)
+
+            if (response.ok) {
+              return { errors: [], valid: true, reason: '' }
+            }
+            else {
+              return { errors: [new Error(`Status: ${response.status}`)], valid: false, reason: 'サーバーエラー' }
+            }
+          }
+          catch (e) {
+            return {
+              errors: [e instanceof Error ? e : new Error(String(e))],
+              valid: false,
+              reason: '接続失敗: 起動しているか、CORS設定を確認してください',
+            }
+          }
+        },
+      },
+    },
     'alibaba-cloud-model-studio': {
       id: 'alibaba-cloud-model-studio',
       category: 'speech',
