@@ -1163,6 +1163,164 @@ export const useProvidersStore = defineStore('providers', () => {
         },
       },
     },
+    'aivis-speech': {
+      id: 'aivis-speech',
+      category: 'speech',
+      tasks: ['text-to-speech'],
+      nameKey: 'settings.pages.providers.provider.aivis-speech.title',
+      name: 'AivisSpeech',
+      descriptionKey: 'settings.pages.providers.provider.aivis-speech.description',
+      description: 'aivis-project.com',
+      icon: 'i-solar:microphone-2-bold-duotone',
+
+      defaultOptions: () => ({
+        baseUrl: 'http://127.0.0.1:10101',
+        speed: 1.0,
+        pitch: 0.0,
+        intonation: 1.0,
+      }),
+
+      createProvider: async (config) => {
+        const baseUrl = (config.baseUrl as string).trim().replace(/\/$/, '')
+        const provider: any = {
+          speech: (model: any, extraOptions?: any) => {
+            return {
+              baseURL: baseUrl,
+              model: 'aivis-speech',
+              fetch: async (input: RequestInfo | URL, init?: RequestInit) => {
+                const request = input instanceof Request ? input : new Request(input, init)
+                const url = new URL(request.url)
+
+                let text = ''
+                let speakerId = '0'
+
+                if (url.searchParams.has('input') || url.searchParams.has('text')) {
+                  text = url.searchParams.get('input') || url.searchParams.get('text') || ''
+                  speakerId = url.searchParams.get('voice') || url.searchParams.get('speaker') || '0'
+                }
+
+                if (!text && init && init.body) {
+                  try {
+                    const bodyStr = typeof init.body === 'string' ? init.body : JSON.stringify(init.body)
+                    const body = JSON.parse(bodyStr)
+                    if (body.input)
+                      text = body.input
+                    if (body.voice)
+                      speakerId = body.voice
+                  }
+                  catch (e) {
+                    console.warn('[AivisSpeech] Failed to parse body:', e)
+                  }
+                }
+
+                if (!text)
+                  throw new Error('Text input is required')
+
+                const speed = (extraOptions?.speed as number) ?? (config.speed as number) ?? 1.0
+                const pitch = (extraOptions?.pitch as number) ?? (config.pitch as number) ?? 0.0
+                const intonation = (extraOptions?.intonation as number) ?? (config.intonation as number) ?? 1.0
+
+                const queryRes = await fetch(`${baseUrl}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                })
+
+                if (!queryRes.ok)
+                  throw new Error(`AivisSpeech audio_query failed: ${queryRes.status}`)
+                const queryJson = await queryRes.json()
+
+                queryJson.speedScale = speed
+                queryJson.pitchScale = pitch
+                queryJson.intonationScale = intonation
+
+                const synthRes = await fetch(`${baseUrl}/synthesis?speaker=${speakerId}`, {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify(queryJson),
+                })
+
+                if (!synthRes.ok)
+                  throw new Error(`AivisSpeech synthesis failed: ${synthRes.status}`)
+
+                return synthRes
+              },
+            }
+          },
+        }
+        return provider
+      },
+
+      capabilities: {
+        listModels: async () => {
+          return [
+            {
+              id: 'aivis-speech',
+              name: 'AivisSpeech Engine',
+              provider: 'aivis-speech',
+            },
+          ]
+        },
+
+        listVoices: async (config) => {
+          try {
+            const baseUrl = (config.baseUrl as string).trim().replace(/\/$/, '')
+            const response = await fetch(`${baseUrl}/speakers`)
+            if (!response.ok)
+              throw new Error('Fetch failed')
+
+            const speakers = await response.json() as any[]
+            const voices: VoiceInfo[] = []
+
+            for (const speaker of speakers) {
+              for (const style of speaker.styles) {
+                voices.push({
+                  id: String(style.id),
+                  name: `${speaker.name} (${style.name})`,
+                  provider: 'aivis-speech',
+                  compatibleModels: ['aivis-speech'],
+                  languages: [{ code: 'ja', title: 'Japanese' }],
+                })
+              }
+            }
+            return voices
+          }
+          catch (e) {
+            console.warn('Failed to list voices', e)
+            return []
+          }
+        },
+      },
+
+      validators: {
+        validateProviderConfig: async (config) => {
+          const baseUrl = (config.baseUrl as string)?.trim().replace(/\/$/, '')
+          if (!baseUrl) {
+            return { errors: [new Error('URL required')], valid: false, reason: 'URLが空です' }
+          }
+
+          try {
+            const controller = new AbortController()
+            const id = setTimeout(() => controller.abort(), 2000)
+            const response = await fetch(`${baseUrl}/version`, { signal: controller.signal })
+            clearTimeout(id)
+
+            if (response.ok) {
+              return { errors: [], valid: true, reason: '' }
+            }
+            else {
+              return { errors: [new Error(`Status: ${response.status}`)], valid: false, reason: 'サーバーエラー' }
+            }
+          }
+          catch (e) {
+            return {
+              errors: [e instanceof Error ? e : new Error(String(e))],
+              valid: false,
+              reason: '接続失敗: 起動しているか、CORS設定を確認してください',
+            }
+          }
+        },
+      },
+    },
     'alibaba-cloud-model-studio': {
       id: 'alibaba-cloud-model-studio',
       category: 'speech',

@@ -655,6 +655,16 @@ pages:
         title: Bilibili/IndexTTS
         callout_indextts2_unavailable_title: 限定的なサポート
         callout_indextts2_unavailable: 現在、IndexTTS2のサポートはご利用いただけません。IndexTTSをご利用ください。
+      aivis-speech:
+        description: https://aivis-project.com/
+        title: Aivis Speech
+        fields:
+          pitch:
+            description: 合成音声のピッチ（高さ）を調整します
+            label: ピッチ
+          intonation:
+            description: 合成音声の抑揚を調整します
+            label: 抑揚
       azure-ai-foundry:
         description: Azure AI Foundry
         title: Azure AI Foundry
