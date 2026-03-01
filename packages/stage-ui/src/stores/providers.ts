@@ -1603,29 +1603,30 @@ export const useProvidersStore = defineStore('providers', () => {
                 const pitch = (extraOptions?.pitch as number) ?? (config.pitch as number) ?? 0.0
                 const intonation = (extraOptions?.intonation as number) ?? (config.intonation as number) ?? 1.0
 
+                // 1. Generate audio query
                 const queryRes = await fetch(`${baseUrl}/audio_query?text=${encodeURIComponent(text)}&speaker=${speakerId}`, {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
                 })
 
                 if (!queryRes.ok)
                   throw new Error(`AivisSpeech audio_query failed: ${queryRes.status}`)
                 const queryJson = await queryRes.json()
 
+                // 2. Apply voice settings
                 queryJson.speedScale = speed
                 queryJson.pitchScale = pitch
                 queryJson.intonationScale = intonation
 
-                const synthRes = await fetch(`${baseUrl}/synthesis?speaker=${speakerId}`, {
+                // 3. Synthesis to get audio stream
+                return fetch(`${baseUrl}/synthesis?speaker=${speakerId}`, {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify(queryJson),
+                }).then((res) => {
+                  if (!res.ok)
+                    throw new Error(`AivisSpeech synthesis failed: ${res.status}`)
+                  return res
                 })
-
-                if (!synthRes.ok)
-                  throw new Error(`AivisSpeech synthesis failed: ${synthRes.status}`)
-
-                return synthRes
               },
             }
           },
