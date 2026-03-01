@@ -1,7 +1,8 @@
 {
   "name": "@proj-airi/plugin-sdk",
   "type": "module",
-  "version": "0.8.4",
+  "version": "0.8.5-beta.3",
+  "private": true,
   "description": "Plugin SDK for Project AIRI",
   "author": {
     "name": "Moeru AI Project AIRI Team",
@@ -33,8 +34,9 @@
     "package.json"
   ],
   "scripts": {
-    "dev": "pnpm run build",
     "build": "tsdown",
+    "dev": "pnpm run build",
+    "test": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -42,6 +44,6 @@
     "@proj-airi/plugin-protocol": "workspace:*",
     "@proj-airi/server-shared": "workspace:*",
     "valibot": "^1.2.0",
-    "xstate": "^5.20.1"
+    "xstate": "^5.28.0"
   }
 }

@@ -349,6 +349,49 @@ function createModuleIdentity(name: string, index: number): ModuleIdentity {
   }
 }
 
+// TODO: Maybe support more complex version formats.
+function resolveSupportedVersions(preferredVersion: string, supportedVersions?: string[]) {
+  const list = [preferredVersion, ...(supportedVersions ?? [])]
+  return [...new Set(list)]
+}
+
+function resolveNegotiatedVersion(preferredVersion: string, hostSupportedVersions: string[], peerSupportedVersions?: string[]) {
+  if (!peerSupportedVersions?.length) {
+    if (hostSupportedVersions.includes(preferredVersion)) {
+      return {
+        acceptedVersion: preferredVersion,
+        exact: true,
+      }
+    }
+
+    return {
+      exact: false,
+      reason: `Host does not support preferred version "${preferredVersion}".`,
+    }
+  }
+
+  if (peerSupportedVersions.includes(preferredVersion) && hostSupportedVersions.includes(preferredVersion)) {
+    return {
+      acceptedVersion: preferredVersion,
+      exact: true,
+    }
+  }
+
+  for (const version of hostSupportedVersions) {
+    if (peerSupportedVersions.includes(version)) {
+      return {
+        acceptedVersion: version,
+        exact: false,
+      }
+    }
+  }
+
+  return {
+    exact: false,
+    reason: `No overlapping supported versions. host=[${hostSupportedVersions.join(', ')}]; peer=[${peerSupportedVersions.join(', ')}].`,
+  }
+}
+
 export type PluginRuntime = 'electron' | 'node' | 'web'
 
 export type ModulePhase = ProtocolModulePhase
@@ -406,6 +449,8 @@ export interface PluginHostOptions {
   transport?: PluginTransport
   protocolVersion?: string
   apiVersion?: string
+  supportedProtocolVersions?: string[]
+  supportedApiVersions?: string[]
 }
 
 export interface PluginStartOptions {
@@ -422,6 +467,7 @@ export interface PluginHostSession {
   plugin: Plugin
   id: string
   index: number
+  cwd: string
   identity: ModuleIdentity
   phase: PluginSessionPhase
   lifecycle: ActorRefFrom<typeof pluginLifecycleMachine>
@@ -457,6 +503,8 @@ export class PluginHost {
   private readonly transport: PluginTransport
   private readonly protocolVersion: string
   private readonly apiVersion: string
+  private readonly supportedProtocolVersions: string[]
+  private readonly supportedApiVersions: string[]
   private readonly capabilities = new Map<string, CapabilityDescriptor>()
   private readonly capabilityWaiters = new Map<string, Set<(descriptor: CapabilityDescriptor) => void>>()
   private providersListResolver: () => Promise<Array<{ name: string }>> | Array<{ name: string }> = () => []
@@ -468,6 +516,8 @@ export class PluginHost {
     this.transport = options.transport ?? { kind: 'in-memory' }
     this.protocolVersion = options.protocolVersion ?? 'v1'
     this.apiVersion = options.apiVersion ?? 'v1'
+    this.supportedProtocolVersions = resolveSupportedVersions(this.protocolVersion, options.supportedProtocolVersions)
+    this.supportedApiVersions = resolveSupportedVersions(this.apiVersion, options.supportedApiVersions)
     this.markCapabilityReady(protocolListProvidersEventName, { source: 'plugin-host' })
   }
 
@@ -482,6 +532,7 @@ export class PluginHost {
   async load(manifest: ManifestV1, options: PluginLoadOptions = {}): Promise<PluginHostSession> {
     // Step 0 (channel gateway preparation): resolve runtime and transport for this plugin.
     const runtime = options.runtime ?? this.runtime
+    const sessionCwd = options.cwd ?? cwd() // Explicitly assign the default CWD.
     const transport = this.transport
 
     // TODO: implement other transports and runtime bindings.
@@ -519,6 +570,7 @@ export class PluginHost {
       plugin: {},
       id,
       index: sessionIndex,
+      cwd: sessionCwd,
       identity,
       phase: lifecycle.getSnapshot().value as PluginSessionPhase,
       lifecycle,
@@ -537,7 +589,7 @@ export class PluginHost {
       // Load plugin module from manifest-selected runtime entrypoint.
       // This is where malformed entrypoints or import errors surface.
       session.plugin = await this.loader.loadPluginFor(manifest, {
-        cwd: options.cwd,
+        cwd: sessionCwd,
         runtime,
       })
 
@@ -594,10 +646,37 @@ export class PluginHost {
       }
 
       session.channels.host.emit(moduleCompatibilityRequest, compatibilityRequest)
+      const protocolNegotiation = resolveNegotiatedVersion(
+        compatibilityRequest.protocolVersion,
+        this.supportedProtocolVersions,
+        compatibilityRequest.supportedProtocolVersions,
+      )
+      const apiNegotiation = resolveNegotiatedVersion(
+        compatibilityRequest.apiVersion,
+        this.supportedApiVersions,
+        compatibilityRequest.supportedApiVersions,
+      )
+
+      const rejectionReasons = [
+        ...protocolNegotiation.acceptedVersion ? [] : [`protocol: ${protocolNegotiation.reason}`],
+        ...apiNegotiation.acceptedVersion ? [] : [`api: ${apiNegotiation.reason}`],
+      ]
+
+      if (rejectionReasons.length > 0) {
+        const reason = `Negotiation rejected: ${rejectionReasons.join('; ')}`
+        session.channels.host.emit(moduleCompatibilityResult, {
+          protocolVersion: compatibilityRequest.protocolVersion,
+          apiVersion: compatibilityRequest.apiVersion,
+          mode: 'rejected',
+          reason,
+        })
+        throw new Error(reason)
+      }
+
       session.channels.host.emit(moduleCompatibilityResult, {
-        protocolVersion: compatibilityRequest.protocolVersion,
-        apiVersion: compatibilityRequest.apiVersion,
-        mode: 'exact',
+        protocolVersion: protocolNegotiation.acceptedVersion!,
+        apiVersion: apiNegotiation.acceptedVersion!,
+        mode: protocolNegotiation.exact && apiNegotiation.exact ? 'exact' : 'downgraded',
       })
 
       // Step 4: broadcast currently known modules for dependency discovery/bootstrap.
@@ -632,14 +711,23 @@ export class PluginHost {
 
       // Optional dependency gate before plugin-owned initialization.
       if (options.requiredCapabilities?.length) {
+        const capabilityTimeoutMs = options.capabilityWaitTimeoutMs ?? 15000
+        const unresolvedCapabilities = options.requiredCapabilities.filter(key => !this.isCapabilityReady(key))
         assertTransition(session, 'waiting-deps')
         session.channels.host.emit(moduleStatus, {
           identity: session.identity,
           phase: 'preparing',
           reason: `Waiting for capabilities: ${options.requiredCapabilities.join(', ')}`,
+          details: {
+            // For richer observability
+            lifecyclePhase: 'waiting-deps',
+            requiredCapabilities: options.requiredCapabilities,
+            unresolvedCapabilities,
+            timeoutMs: capabilityTimeoutMs,
+          },
         })
 
-        await this.waitForCapabilities(options.requiredCapabilities, options.capabilityWaitTimeoutMs)
+        await this.waitForCapabilities(options.requiredCapabilities, capabilityTimeoutMs)
         assertTransition(session, 'prepared')
         session.channels.host.emit(modulePrepared, {
           identity: session.identity,
@@ -805,6 +893,32 @@ export class PluginHost {
     return descriptor
   }
 
+  markCapabilityDegraded(key: string, metadata?: Record<string, unknown>) {
+    const current = this.capabilities.get(key)
+    const descriptor: CapabilityDescriptor = {
+      key,
+      state: 'degraded',
+      metadata: metadata ?? current?.metadata,
+      updatedAt: Date.now(),
+    }
+
+    this.capabilities.set(key, descriptor)
+    return descriptor
+  }
+
+  withdrawCapability(key: string, metadata?: Record<string, unknown>) {
+    const current = this.capabilities.get(key)
+    const descriptor: CapabilityDescriptor = {
+      key,
+      state: 'withdrawn',
+      metadata: metadata ?? current?.metadata,
+      updatedAt: Date.now(),
+    }
+
+    this.capabilities.set(key, descriptor)
+    return descriptor
+  }
+
   listCapabilities() {
     return [...this.capabilities.values()]
   }
@@ -906,11 +1020,10 @@ export class PluginHost {
     }
 
     const manifest = previous.manifest
-    const cwdValue = options.cwd
     this.stop(sessionId)
     return this.start(manifest, {
       ...options,
-      cwd: cwdValue,
+      cwd: options.cwd ?? previous.cwd,
       runtime: options.runtime ?? previous.runtime,
     })
   }

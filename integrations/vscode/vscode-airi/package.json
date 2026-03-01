@@ -2,7 +2,8 @@
   "publisher": "proj-airi",
   "name": "vscode-airi",
   "displayName": "AIRI VSCode adapter",
-  "version": "0.8.4",
+  "type": "module",
+  "version": "0.8.5-beta.3",
   "private": true,
   "description": "Adapter that connects VSCode into Project AIRI",
   "repository": {
@@ -17,7 +18,7 @@
   "main": "./dist/extension.cjs",
   "icon": "res/logo.jpg",
   "engines": {
-    "vscode": "^1.108.1"
+    "vscode": "^1.109.0"
   },
   "activationEvents": [
     "onStartupFinished"
@@ -70,11 +71,11 @@
     "@guiiai/logg": "catalog:",
     "@moeru/std": "catalog:",
     "@proj-airi/server-sdk": "workspace:*",
-    "@types/vscode": "^1.108.1",
+    "@types/vscode": "^1.109.0",
     "es-toolkit": "catalog:",
     "injeca": "catalog:",
     "nanoid": "catalog:",
     "tinyexec": "^1.0.2",
-    "vscode-ext-gen": "^1.5.1"
+    "vscode-ext-gen": "^1.6.0"
   }
 }
