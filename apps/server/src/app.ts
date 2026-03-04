@@ -5,19 +5,20 @@ import process from 'node:process'
 import { initLogger, LoggerFormat, LoggerLevel, useLogger } from '@guiiai/logg'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { cors } from 'hono/cors'
 import { logger as honoLogger } from 'hono/logger'
 import { createLoggLogger, injeca } from 'injeca'
 
+import { createAuth } from './libs/auth'
+import { createDrizzle, migrateDatabase } from './libs/db'
+import { parsedEnv } from './libs/env'
 import { sessionMiddleware } from './middlewares/auth'
 import { createCharacterRoutes } from './routes/characters'
 import { createChatRoutes } from './routes/chats'
 import { createProviderRoutes } from './routes/providers'
-import { createAuth } from './services/auth'
 import { createCharacterService } from './services/characters'
 import { createChatService } from './services/chats'
-import { createDrizzle, migrateDatabase } from './services/db'
-import { parsedEnv } from './services/env'
 import { createProviderService } from './services/providers'
 import { ApiError, createInternalError } from './utils/error'
 import { getTrustedOrigin } from './utils/origin'
@@ -47,6 +48,7 @@ function buildApp({ auth, characterService, chatService, providerService }: AppD
     )
     .use(honoLogger())
     .use('*', sessionMiddleware(auth))
+    .use('*', bodyLimit({ maxSize: 1024 * 1024 }))
     .onError((err, c) => {
       if (err instanceof ApiError) {
         return c.json({

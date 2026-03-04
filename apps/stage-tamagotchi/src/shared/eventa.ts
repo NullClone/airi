@@ -12,8 +12,7 @@ export const electronOpenDevtoolsWindow = defineInvokeEventa<void, { route?: str
 export interface ElectronServerChannelTlsConfig {
   [key: string]: unknown
 }
-export const electronStartWebSocketServer = defineInvokeEventa<void, { websocketTlsConfig: ElectronServerChannelTlsConfig | null }>('eventa:invoke:electron:start-websocket-server')
-export const electronRestartWebSocketServer = defineInvokeEventa<void, { websocketTlsConfig: ElectronServerChannelTlsConfig | null }>('eventa:invoke:electron:restart-websocket-server')
+
 export interface ElectronServerChannelConfig {
   websocketTlsConfig: ElectronServerChannelTlsConfig | null
 }
@@ -96,15 +95,18 @@ export interface PluginRegistrySnapshot {
   plugins: PluginManifestSummary[]
 }
 
+// TODO: Replace these manually duplicated IPC types with re-exports from
+// @proj-airi/plugin-sdk (CapabilityDescriptor) once stage-ui and the shared
+// eventa layer can depend on the SDK without introducing unwanted coupling.
 export interface PluginCapabilityPayload {
   key: string
-  state: 'announced' | 'ready'
+  state: 'announced' | 'ready' | 'degraded' | 'withdrawn'
   metadata?: Record<string, unknown>
 }
 
 export interface PluginCapabilityState {
   key: string
-  state: 'announced' | 'ready'
+  state: 'announced' | 'ready' | 'degraded' | 'withdrawn'
   metadata?: Record<string, unknown>
   updatedAt: number
 }
