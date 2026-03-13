@@ -1,3 +1,5 @@
+import type { FileLoggerHandle } from './app/file-logger'
+
 import { dirname } from 'node:path'
 import { env, platform } from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -5,16 +7,17 @@ import { fileURLToPath } from 'node:url'
 import messages from '@proj-airi/i18n/locales'
 
 import { electronApp, optimizer } from '@electron-toolkit/utils'
-import { Format, LogLevel, setGlobalFormat, setGlobalLogLevel, useLogg } from '@guiiai/logg'
+import { Format, LogLevel, setGlobalFormat, setGlobalHookPostLog, setGlobalLogLevel, useLogg } from '@guiiai/logg'
 import { initScreenCaptureForMain } from '@proj-airi/electron-screen-capture/main'
 import { app, ipcMain } from 'electron'
 import { noop } from 'es-toolkit'
-import { createLoggLogger, injeca } from 'injeca'
+import { createLoggLogger, injeca, lifecycle } from 'injeca'
 import { isLinux } from 'std-env'
 
 import icon from '../../resources/icon.png?asset'
 
 import { openDebugger, setupDebugger } from './app/debugger'
+import { nullFileLoggerHandle, setupFileLogger } from './app/file-logger'
 import { createGlobalAppConfig } from './configs/global'
 import { emitAppBeforeQuit, emitAppReady, emitAppWindowAllClosed } from './libs/bootkit/lifecycle'
 import { setElectronMainDirname } from './libs/electron/location'
@@ -31,6 +34,7 @@ import { setupChatWindowReusableFunc } from './windows/chat'
 import { setupDevtoolsWindow } from './windows/devtools'
 import { setupMainWindow } from './windows/main'
 import { setupNoticeWindowManager } from './windows/notice'
+import { setupOnboardingWindowManager } from './windows/onboarding'
 import { setupSettingsWindowReusableFunc } from './windows/settings'
 import { setupWidgetsWindowManager } from './windows/widgets'
 
@@ -77,7 +81,19 @@ electronApp.setAppUserModelId('ai.moeru.airi')
 
 initScreenCaptureForMain()
 
+let fileLogger: FileLoggerHandle = nullFileLoggerHandle
+
 app.whenReady().then(async () => {
+  // Initialize file logger and register the hook
+  fileLogger = await setupFileLogger()
+
+  // Register the global hook for file logging
+  setGlobalHookPostLog((_, formatted) => {
+    if (fileLogger.logFileFd !== null) {
+      void fileLogger.appendLog(formatted)
+    }
+  })
+
   injeca.setLogger(createLoggLogger(useLogg('injeca').useGlobalConfig()))
 
   const appConfig = injeca.provide('configs:app', () => createGlobalAppConfig())
@@ -90,8 +106,8 @@ app.whenReady().then(async () => {
   })
 
   const serverChannel = injeca.provide('modules:channel-server', {
-    dependsOn: { app: electronApp },
-    build: async () => setupServerChannel(),
+    dependsOn: { app: electronApp, lifecycle },
+    build: async ({ dependsOn }) => setupServerChannel(dependsOn),
   })
 
   const mcpStdioManager = injeca.provide('modules:mcp-stdio-manager', {
@@ -107,6 +123,12 @@ app.whenReady().then(async () => {
   const beatSync = injeca.provide('windows:beat-sync', () => setupBeatSync())
 
   const devtoolsMarkdownStressWindow = injeca.provide('windows:devtools:markdown-stress', () => setupDevtoolsWindow())
+
+  const onboardingWindowManager = injeca.provide('windows:onboarding', {
+    dependsOn: { serverChannel, i18n },
+    build: ({ dependsOn }) => setupOnboardingWindowManager(dependsOn),
+  })
+
   const noticeWindow = injeca.provide('windows:notice', {
     dependsOn: { i18n, serverChannel },
     build: ({ dependsOn }) => setupNoticeWindowManager(dependsOn),
@@ -133,7 +155,7 @@ app.whenReady().then(async () => {
   })
 
   const mainWindow = injeca.provide('windows:main', {
-    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel, mcpStdioManager, i18n },
+    dependsOn: { settingsWindow, chatWindow, widgetsManager, noticeWindow, beatSync, autoUpdater, serverChannel, mcpStdioManager, i18n, onboardingWindowManager },
     build: async ({ dependsOn }) => setupMainWindow(dependsOn),
   })
 
@@ -148,7 +170,7 @@ app.whenReady().then(async () => {
   })
 
   injeca.invoke({
-    dependsOn: { mainWindow, tray, serverChannel, pluginHost, mcpStdioManager },
+    dependsOn: { mainWindow, tray, serverChannel, pluginHost, mcpStdioManager, onboardingWindow: onboardingWindowManager },
     callback: noop,
   })
 
@@ -183,4 +205,5 @@ app.on('window-all-closed', () => {
 app.on('before-quit', async () => {
   emitAppBeforeQuit()
   injeca.stop()
+  await fileLogger.close() // Ensure all logs are flushed
 })
